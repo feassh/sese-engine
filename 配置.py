@@ -21,7 +21,8 @@ meilisearch_batch_size = 100  # 批量处理文档数量
 单网页最多关键词 = 250
 最大epoch = 100 # 增加爬取的均匀度，增加爬取出现异常的概率
 预期繁荣网站比例 = 0.6 # 增加每个epoch中带有高反向链接权重的域名的数量
-入口 = 'https://zh.wikipedia.org/'
+入口 = 'https://blog.meta-code.top/'
+# 入口 = 'https://zh.wikipedia.org/'
 
 使用在线摘要 = True     # 增加搜索结果信息的可读性，增加搜索时间
 在线摘要限时 = 3        # 减少信息不完整的搜索结果数量，增加搜索时间

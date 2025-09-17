@@ -149,7 +149,7 @@ def 坏(url: str) -> float:
 
 
 _lang_model = None
-def 检测语言(s: str) -> str:
+def detect_lang(s: str) -> str:
     global _lang_model
     if not _lang_model:
         import fasttext

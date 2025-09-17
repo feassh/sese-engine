@@ -37,8 +37,8 @@ threading.excepthook = lambda x: print(f'{x.thread} 遇到了exception: {repr(x.
 app = flask.Flask(__name__)
 # prometheus_client.start_http_server(14953)
 
-调整表 = 信息.调整表()
-屏蔽词 = 信息.屏蔽词()
+调整表 = 信息.adjustment_data()
+屏蔽词 = 信息.block_words()
 
 
 @app.route('/search')
@@ -163,8 +163,8 @@ def _计算权重分数(url: str, domain: str, prosperity: float, keys: List[str
     # 语种权重
     try:
         网站信息 = map_website[domain]
-        if 网站信息.语种:
-            中文度 = 网站信息.语种.get('zh', 0)
+        if 网站信息.lang_type:
+            中文度 = 网站信息.lang_type.get('zh', 0)
             语种倍数 = 1 + 中文度 * 语种权重
         else:
             语种倍数 = 1.0
@@ -175,7 +175,7 @@ def _计算权重分数(url: str, domain: str, prosperity: float, keys: List[str
     现在 = int(time.time())
     try:
         网站信息 = map_website[domain]
-        时间 = 网站信息.最后访问时间 or 1648000000
+        时间 = 网站信息.last_visit_time or 1648000000
         过去天数 = (现在 - 时间) // (3600 * 24)
         过去天数 = max(0, min(180, 过去天数 - 1))
         时间倍数 = 权重每日衰减 ** 过去天数
@@ -226,7 +226,7 @@ def 缓存摘要(url: str):
     if not 使用在线摘要:
         return None
     try:
-        return 文.摘要(url, 乖=False, timeout=在线摘要限时, 大小限制=60000)[:3]
+        return 文.get_desc(url, 乖=False, timeout=在线摘要限时, 大小限制=60000)[:3]
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
         print(f'获取「{url}」时网络不好！')
         return None
