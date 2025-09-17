@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.4
+    container_name: sese_meilisearch
+    restart: unless-stopped
+    ports:
+      - "7700:7700"
+    environment:
+      - MEILI_ENV=production  # 生产环境可以改为production
+      - MEILI_MASTER_KEY=your_master_key_here  # 生产环境请设置强密码
+      - MEILI_HTTP_ADDR=0.0.0.0:7700
+      - MEILI_DB_PATH=/meili_data
+    volumes:
+      - meilisearch_data:/meili_data
+    networks:
+      - sese_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  sese-engine:
+    build: .
+    container_name: sese_engine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+    environment:
+      - MEILISEARCH_HOST=http://meilisearch:7700
+      - MEILISEARCH_KEY=your_master_key_here  # 与上面保持一致
+    volumes:
+      - ./savedata:/app/savedata
+      - ./data:/app/data
+    networks:
+      - sese_network
+    command: >
+      sh -c "
+        python setup_meilisearch.py &&
+        python migrate_to_meilisearch.py &&
+        ./启动.sh
+      "
+
+volumes:
+  meilisearch_data:
+
+networks:
+  sese_network:
+    driver: bridge

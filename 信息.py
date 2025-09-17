@@ -21,6 +21,8 @@ def 繁荣表() -> dict:
         return {}
     with open(存储位置/'繁荣.json', encoding='utf8') as f:
         d = json.load(f)
+        if len(d) == 0:
+            return {}
     d = _归1化(d)
     for k, v in d.items():
         now = k

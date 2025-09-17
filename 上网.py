@@ -12,52 +12,81 @@ from typing import List, Tuple, Iterable, Callable, Dict, Hashable
 import requests
 import tldextract
 import prometheus_client
-from persistqueue import Queue
 
 from 打点 import tqdm, tqdm面板, 计时打点, 直方图打点
 import 分析
 import 信息
 from 文 import 缩, 摘要
-from 存储 import 融合之门
 from 网站 import 超网站信息, 网站
-from 配置 import 爬取线程数, 爬取集中度, 单网页最多关键词, 入口, 存储位置, 最大epoch, 预期繁荣网站比例
+from 配置 import 爬取线程数, 爬取集中度, 单网页最多关键词, 入口, 存储位置, 最大epoch, 预期繁荣网站比例, meilisearch_batch_size
 from utils import tqdm_exception_logger, 坏, 检测语言, netloc, html结构特征
+from meilisearch_client import meilisearch_client
 
 
-面板 = tqdm面板(['访问url数', '访问成功url数', '获取域名基本信息次数', '获取词数', '获取词数(英文)', '发送队列长度', '发送次数', '发送失败次数', '爬取线程数', '当前epoch进度'])
+面板 = tqdm面板(['访问url数', '访问成功url数', '获取域名基本信息次数', '获取词数', '获取词数(英文)', '待索引文档数', '索引成功次数', '索引失败次数', '爬取线程数', '当前epoch进度'])
 繁荣打点 = 直方图打点('访问url繁荣', [0, 0.1, 0.3, 0.7, 1.5, 3.1, 6.3, 12, 25, 50, 100, 200, 400, 800, 1600, float("inf")])
 url域名分布打点 = 直方图打点('url域名分布', [1, 2, 3, 5, 7, 11, 17, 25, 38, 57, 86, 129, 194, 291, 437, 656, float("inf")])
-prometheus_client.start_http_server(14950)
+# prometheus_client.start_http_server(14950)
 
-门 = 融合之门(存储位置/'门')
 繁荣表 = 信息.繁荣表()
-面板['发送队列长度'].total = 队列最大长度 = 300000
-队 = Queue(存储位置/'临时队列', autosave=True, maxsize=队列最大长度)
+待索引文档 = []  # 替代原来的队列系统
+索引锁 = threading.Lock()
 
 
-def 真送(data):
-    面板['发送次数'].update(1)
-    try:
-        requests.post('http://127.0.0.1:5000/l', data=json.dumps(data)).raise_for_status()
-    except Exception:
-        面板['发送失败次数'].update(1)
+def 批量索引文档():
+    """批量将文档添加到Meilisearch"""
+    global 待索引文档
+    with 索引锁:
+        if len(待索引文档) >= meilisearch_batch_size:
+            documents = 待索引文档[:meilisearch_batch_size]
+            待索引文档 = 待索引文档[meilisearch_batch_size:]
+
+            try:
+                task = meilisearch_client.batch_add_documents(documents)
+                if task:
+                    面板['索引成功次数'].update(len(documents))
+                else:
+                    面板['索引失败次数'].update(len(documents))
+            except Exception as e:
+                tqdm_exception_logger(e)
+                面板['索引失败次数'].update(len(documents))
 
 
-def 真送循环():
-    while True:
-        try:
-            data = 队.get()
-        except Exception as e:  # persistqueue偶尔会抛出PermissionError，原因不明
-            tqdm_exception_logger(e)
-            continue
-        真送(data)
+def 添加到索引(url: str, title: str, description: str, text: str, keywords: List[Tuple[str, float]]):
+    """添加文档到待索引队列"""
+    global 待索引文档
 
+    domain = netloc(url)
 
-def 送(data):
-    队.put(data)
-    if random.random() < 0.1:
-        面板['发送队列长度'].n = 队.qsize()
-        面板['发送队列长度'].refresh()
+    # 从网站信息获取语言
+    网站信息 = 超网站信息[domain]
+    language = 'zh'  # 默认中文
+    if 网站信息.语种:
+        language = max(网站信息.语种.items(), key=lambda x: x[1])[0]
+
+    # 获取繁荣度
+    prosperity = 信息.荣(url)
+
+    document = {
+        'url': url,
+        'title': title,
+        'description': description,
+        'text': text,
+        'keywords': [kw[0] for kw in keywords],  # 只保留关键词，不保留权重
+        'domain': domain,
+        'language': language,
+        'https_available': url.startswith('https://'),
+        'prosperity': prosperity
+    }
+
+    with 索引锁:
+        待索引文档.append(document)
+        面板['待索引文档数'].n = len(待索引文档)
+        面板['待索引文档数'].refresh()
+
+    # 检查是否需要批量处理
+    if len(待索引文档) >= meilisearch_batch_size:
+        批量索引文档()
 
 
 @计时打点
@@ -72,16 +101,20 @@ def 摘(url: str) -> Tuple[str, str, str, List[str], str, Dict[str, str], str, s
             息 = 超网站信息[b]
             息.重定向[k] = v
             if len(息.重定向) > 50:
-                息.重定向 = dict(sorted(息.重定向.items(), key=lambda x: random.random() - (x[0] == f'https://{b}/'))[:40])
+                息.重定向 = dict(
+                    sorted(息.重定向.items(), key=lambda x: random.random() - (x[0] == f'https://{b}/'))[:40])
             超网站信息[b] = 息
-    门[真url] = title, description[:256], text[:256], int(time.time())
+
+    # 直接处理关键词并添加到索引，移除原来的队列发送
     l = 分析.龙(title, description, text)
     if l:
         l = sorted(l, key=lambda x: x[1], reverse=True)[:单网页最多关键词]
-        data = [真url, l]
         面板['获取词数'].update(len(l))
         面板['获取词数(英文)'].update(len([x for x in l if x[0].isascii()]))
-        送(data)
+
+        # 添加到Meilisearch索引
+        添加到索引(真url, title, description[:256], text[:256], l)
+
     return r
 
 
@@ -140,7 +173,7 @@ def 超吸(url: str) -> List[str]:
         except Exception as e:
             b = netloc(url)
             息 = 超网站信息[b]
-            if 息.ip is None:    # 不做错误处理，如果DNS查询失败说明它不是域名
+            if 息.ip is None:
                 息.ip = [i[4][0] for i in socket.getaddrinfo(b, 443, 0, 0, socket.SOL_TCP)][:3]
             if 息.成功率 is None:
                 息.成功率 = 0
@@ -267,28 +300,27 @@ def 重整(url_list: List[Tuple[str, float]]) -> List[str]:
 打点 = []
 
 
-def _计算线程数():
-    return (1.2-(队.qsize() / 队列最大长度))/1.2 * 爬取线程数
-
-
 def bfs(start: str, epoch=最大epoch):
     吸过 = set()
     q = [start]
-    线程数 = _计算线程数()
     for ep in tqdm(range(epoch), ncols=60, desc='epoch'):
         吸过 |= {*q}
         新q = []
-        线程数 = sorted([线程数 * 0.9 + _计算线程数() * 0.1, _计算线程数() + 2, _计算线程数() - 2])[1]
-        面板['爬取线程数'].n = 线程数
+        面板['爬取线程数'].n = 爬取线程数
         面板['爬取线程数'].total = 爬取线程数
         面板['爬取线程数'].refresh()
         面板['当前epoch进度'].update(-面板['当前epoch进度'].n)
         面板['当前epoch进度'].total = len(q)
-        for href in ThreadPoolExecutor(max_workers=max(1, round(线程数))).map(超吸, q):
+        for href in ThreadPoolExecutor(max_workers=max(1, round(爬取线程数))).map(超吸, q):
             n = len(href)
             for url in href:
                 if url not in 吸过:
-                    新q.append((url, 1/n))
+                    新q.append((url, 1 / n))
+
+        # 在每个epoch结束时，处理剩余的待索引文档
+        if 待索引文档:
+            批量索引文档()
+
         if not 新q:
             print('队列空了，坏！')
             return
@@ -315,6 +347,4 @@ def bfs(start: str, epoch=最大epoch):
 
 
 if __name__ == '__main__':
-    for _ in range(16):
-        threading.Thread(target=真送循环, daemon=True).start()
     bfs(入口)

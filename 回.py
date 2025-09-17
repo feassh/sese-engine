@@ -13,10 +13,13 @@ from utils import 分解
 from 打点 import tqdm
 from 文 import 缩
 from 配置 import 存储位置
-from 存储 import 融合之门
-
+from 网站 import 超网站信息, 融合之门
+from meilisearch_client import meilisearch_client
 
 prometheus_client.start_http_server(14952)
+
+# 保留网站信息存储，但移除索引相关的处理
+网站之门 = 融合之门(存储位置/'网站之门')
 
 
 def ip字符串(ip_list: Optional[List[str]]) -> str:
@@ -24,9 +27,7 @@ def ip字符串(ip_list: Optional[List[str]]) -> str:
     ip_list = [i[:i.rfind('.')] for i in ip_list]
     return ','.join(ip_list)
 
-
 def 计数() -> Tuple[Dict[str, int], ...]:
-    网站之门 = 融合之门(存储位置/'网站之门')
     子域名个数 = {}
     服务器个数 = {}
     模板个数 = {}
@@ -61,7 +62,6 @@ def 计数() -> Tuple[Dict[str, int], ...]:
     服务器个数 = {k: v for k, v in 服务器个数.items() if v >= 4}
     return 子域名个数, 模板个数, 同ip个数, 服务器个数
 
-
 def 计算倍率(k, v, 子域名个数, 模板个数) -> float:
     if not v.get('链接'):
         return 0
@@ -83,7 +83,6 @@ def 计算倍率(k, v, 子域名个数, 模板个数) -> float:
 
 
 def 超源(条件: Optional[Callable] = None, *, 子域名个数, 模板个数) -> Iterable[Tuple[str, dict, float]]:
-    网站之门 = 融合之门(存储位置/'网站之门')
     for k, v in 网站之门.items():
         if 条件 and not 条件(v):
             continue
@@ -92,9 +91,7 @@ def 超源(条件: Optional[Callable] = None, *, 子域名个数, 模板个数) 
             continue
         yield k, v, 倍
 
-
 def 复源(d1: Dict[str, float], *, 子域名个数, 模板个数) -> Iterable[Tuple[str, dict, float]]:
-    网站之门 = 融合之门(存储位置/'网站之门')
     for k, r in d1.items():
         if '/' in k:
             continue
@@ -104,7 +101,6 @@ def 复源(d1: Dict[str, float], *, 子域名个数, 模板个数) -> Iterable[T
                 continue
             真倍 = min(2, 倍 * math.log2(2+r))
             yield k, v, 真倍
-
 
 def 超融合(f: Iterable[Tuple[str, dict]], *, 同ip个数, 服务器个数, desc) -> Dict[str, float]:
     向量化阈值 = 0.21
@@ -177,7 +173,6 @@ def 超融合(f: Iterable[Tuple[str, dict]], *, 同ip个数, 服务器个数, de
 def 存档(path, data):
     open(path, 'w', encoding='utf8').write(json.dumps(data, ensure_ascii=False, indent=2))
 
-
 def 词统计(f: Iterable[Tuple[str, dict]]) -> Dict[str, float]:
     关键词个数 = {}
     for i, (k, v, 倍) in tqdm(enumerate(f), desc='词统计'):
@@ -189,12 +184,46 @@ def 词统计(f: Iterable[Tuple[str, dict]]) -> Dict[str, float]:
     return 关键词个数
 
 
+def 更新meilisearch繁荣度(繁荣数据: Dict[str, float]):
+    """更新Meilisearch中的繁荣度数据"""
+    print("开始更新Meilisearch中的繁荣度...")
+
+    # 批量更新繁荣度
+    batch_size = 1000
+    updates = []
+
+    for url, prosperity in tqdm(繁荣数据.items(), desc="准备繁荣度更新"):
+        if '/' in url:  # 只处理完整URL，不处理域名
+            updates.append({
+                'id': url,
+                'prosperity': prosperity
+            })
+
+            if len(updates) >= batch_size:
+                try:
+                    meilisearch_client.index.update_documents(updates)
+                    print(f"更新了 {len(updates)} 个文档的繁荣度")
+                except Exception as e:
+                    print(f"更新繁荣度失败: {e}")
+                updates = []
+
+    # 处理剩余的更新
+    if updates:
+        try:
+            meilisearch_client.index.update_documents(updates)
+            print(f"更新了 {len(updates)} 个文档的繁荣度")
+        except Exception as e:
+            print(f"更新剩余繁荣度失败: {e}")
+
+    print("繁荣度更新完成")
+
+
 def 刷新():
     子域名个数, 模板个数, 同ip个数, 服务器个数 = 计数()
-    存档(存储位置/'子域名个数.json', 子域名个数)
-    存档(存储位置/'模板个数.json', 模板个数)
-    存档(存储位置/'同ip个数.json', 同ip个数)
-    存档(存储位置/'服务器个数.json', 服务器个数)
+    存档(存储位置 / '子域名个数.json', 子域名个数)
+    存档(存储位置 / '模板个数.json', 模板个数)
+    存档(存储位置 / '同ip个数.json', 同ip个数)
+    存档(存储位置 / '服务器个数.json', 服务器个数)
 
     源1 = 超源(lambda x: x.get('https可用'), 子域名个数=子域名个数, 模板个数=模板个数)
     d1 = 超融合(源1, 同ip个数=同ip个数, 服务器个数=服务器个数, desc='计算HTTPS反向链接')
@@ -204,7 +233,7 @@ def 刷新():
     d2 = 超融合(源2, 同ip个数=同ip个数, 服务器个数=服务器个数, desc='计算HTTP反向链接')
 
     ks = {*d1, *d2, *d1a}
-    d = {k: d1.get(k, 0) + d1a.get(k, 0) + min(d1.get(k, 0)*0.5+d2.get(k, 0)*0.1, d2.get(k, 0)) for k in ks}
+    d = {k: d1.get(k, 0) + d1a.get(k, 0) + min(d1.get(k, 0) * 0.5 + d2.get(k, 0) * 0.1, d2.get(k, 0)) for k in ks}
     d = {k: v for k, v in d.items() if v > 0.16}
     d = dict(sorted(d.items()))
 
@@ -212,20 +241,25 @@ def 刷新():
     print(f'繁荣的网页个数: {len(d)}，繁荣的网页总能量: {sum(d.values())}')
     print(f'繁荣的域名个数: {len(q)}，繁荣的域名总能量: {sum(q)}')
 
-    存档(存储位置/'繁荣.json', d)
+    存档(存储位置 / '繁荣.json', d)
+
+    # 更新Meilisearch中的繁荣度
+    更新meilisearch繁荣度(d)
 
     关键词个数 = 词统计(超源(lambda x: x.get('https可用'), 子域名个数=子域名个数, 模板个数=模板个数))
-    存档(存储位置/'关键词个数.json', 关键词个数)
+    存档(存储位置 / '关键词个数.json', 关键词个数)
 
 
 if __name__ == '__main__':
     while True:
-        now = datetime.datetime.now()
-        t = (48 - now.hour + 2) * 3600
-        print('进入休眠，下次预期启动时间:', str(now+datetime.timedelta(seconds=t)))
-        time.sleep(t)
         try:
             print('=======================\n刷新时间', datetime.datetime.now())
             刷新()
         except Exception as e:
             logging.exception(e)
+
+        now = datetime.datetime.now()
+        t = (48 - now.hour + 2) * 3600
+        # t = 10
+        print('进入休眠，下次预期启动时间:', str(now + datetime.timedelta(seconds=t)))
+        time.sleep(t)
