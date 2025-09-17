@@ -9,12 +9,12 @@ import tldextract
 from 虫 import 爬
 
 
-def 缩(url: str) -> str:
+def shrink_url(url: str) -> str:
     t = tldextract.extract(url)
     return f'{t.domain}.{t.suffix}'
 
 
-def 摘要(url: str, **d) -> Tuple[str, str, str, List[str], str, Dict[str, str], str, str]:
+def get_desc(url: str, **d) -> Tuple[str, str, str, List[str], str, Dict[str, str], str, str]:
     if t := 爬(url, **d):
         raw, 真url, 重定向表, 服务器类型 = t
     else:

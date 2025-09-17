@@ -22,11 +22,11 @@ from waitress import serve
 
 from rimo_utils.计时 import 计时
 
-from 打点 import 计时打点
+from 打点 import timing_tick
 from utils import netloc
 import 文
 import 信息
-from 网站 import 超网站信息
+from 网站 import map_website
 from 分析 import 分
 from 配置 import 使用在线摘要, 在线摘要限时, 语种权重, 连续关键词权重, 反向链接权重, 权重每日衰减, 人服务器端口
 from meilisearch_client import meilisearch_client
@@ -48,7 +48,7 @@ def search():
     return resp
 
 
-_息 = lru_cache(maxsize=4096)(lambda b, _: 超网站信息[b])
+_息 = lru_cache(maxsize=4096)(lambda b, _: map_website[b])
 息 = lambda b: _息(b, int(time.time())//(3600*24))
 
 
@@ -89,7 +89,7 @@ def _search():
         )
 
 
-@计时打点
+@timing_tick
 def 查询(keys: List[str], offset: int = 0, limit: int = 10, site: Optional[str] = None):
     """使用Meilisearch进行查询"""
     if not keys:
@@ -162,7 +162,7 @@ def _计算权重分数(url: str, domain: str, prosperity: float, keys: List[str
 
     # 语种权重
     try:
-        网站信息 = 超网站信息[domain]
+        网站信息 = map_website[domain]
         if 网站信息.语种:
             中文度 = 网站信息.语种.get('zh', 0)
             语种倍数 = 1 + 中文度 * 语种权重
@@ -174,7 +174,7 @@ def _计算权重分数(url: str, domain: str, prosperity: float, keys: List[str
     # 时间衰减
     现在 = int(time.time())
     try:
-        网站信息 = 超网站信息[domain]
+        网站信息 = map_website[domain]
         时间 = 网站信息.最后访问时间 or 1648000000
         过去天数 = (现在 - 时间) // (3600 * 24)
         过去天数 = max(0, min(180, 过去天数 - 1))

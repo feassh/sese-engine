@@ -11,21 +11,22 @@ import prometheus_client
 
 from utils import 分解
 from 打点 import tqdm
-from 文 import 缩
+from 文 import shrink_url
 from 配置 import 存储位置
-from 网站 import 超网站信息, 融合之门
+from 网站 import map_website, 融合之门
 from meilisearch_client import meilisearch_client
 
-prometheus_client.start_http_server(14952)
+# prometheus_client.start_http_server(14952)
 
 # 保留网站信息存储，但移除索引相关的处理
-网站之门 = 融合之门(存储位置/'网站之门')
+网站之门 = 融合之门(存储位置 / '网站之门')
 
 
 def ip字符串(ip_list: Optional[List[str]]) -> str:
     ip_list = sorted(ip_list or [])
     ip_list = [i[:i.rfind('.')] for i in ip_list]
     return ','.join(ip_list)
+
 
 def 计数() -> Tuple[Dict[str, int], ...]:
     子域名个数 = {}
@@ -35,61 +36,124 @@ def 计数() -> Tuple[Dict[str, int], ...]:
     字段覆盖量 = {}
     关键词个数 = {}
     一级域名个数 = tqdm(desc='一级域名个数')
+
+    # 添加调试信息
+    有链接的网站数 = 0
+    总网站数 = 0
+
     for i, (k, v) in tqdm(enumerate(iter(网站之门.items())), desc='计数'):
-        if (i+1) % 100_0000 == 0:
+        总网站数 += 1
+
+        # 检查链接字段
+        if v.get('链接'):
+            有链接的网站数 += 1
+
+        if (i + 1) % 100_0000 == 0:
             模板个数 = {k: v for k, v in 模板个数.items() if v > 1}
             同ip个数 = {k: v for k, v in 同ip个数.items() if v > 1}
             服务器个数 = {k: v for k, v in 服务器个数.items() if v > 1}
             关键词个数 = {k: v for k, v in 关键词个数.items() if v > 1}
+
         for a, b in v.items():
             if b:
                 字段覆盖量[a] = 字段覆盖量.get(a, 0) + 1
-        超b = 缩(k)
+
+        超b = shrink_url(k)
         子域名个数[超b] = 子域名个数.get(超b, 0) + 1
-        一级域名个数.update(len(子域名个数)-一级域名个数.n)
+        一级域名个数.update(len(子域名个数) - 一级域名个数.n)
+
         if t := v.get('结构'):
             模板个数[t] = 模板个数.get(t, 0) + 1
+
         if t := v.get('服务器类型'):
             s = ','.join(sorted(t))
             服务器个数[s] = 服务器个数.get(s, 0) + 1
+
         if ip := v.get('ip'):
             ip_str = ip字符串(ip)
             同ip个数[ip_str] = 同ip个数.get(ip_str, 0) + 1
+
     print(f'字段覆盖量: {字段覆盖量}')
+    print(f'调试信息: 总网站数={总网站数}, 有链接的网站数={有链接的网站数}')
+
+    # 如果没有链接数据，尝试从Meilisearch获取数据来补充
+    if 有链接的网站数 == 0:
+        print("警告: 没有发现链接数据，尝试从现有数据生成基础繁荣度...")
+        return 生成基础数据(子域名个数, 模板个数, 同ip个数, 服务器个数)
+
     子域名个数 = {k: v for k, v in 子域名个数.items() if v >= 4}
     模板个数 = {k: v for k, v in 模板个数.items() if v >= 4}
     同ip个数 = {k: v for k, v in 同ip个数.items() if v >= 4}
     服务器个数 = {k: v for k, v in 服务器个数.items() if v >= 4}
     return 子域名个数, 模板个数, 同ip个数, 服务器个数
 
+
+def 生成基础数据(子域名个数, 模板个数, 同ip个数, 服务器个数):
+    """当没有链接数据时，基于现有数据生成基础繁荣度"""
+    基础繁荣度 = {}
+
+    # 基于访问次数和成功率生成基础繁荣度
+    for k, v in tqdm(网站之门.items(), desc='生成基础繁荣度'):
+        访问次数 = v.get('访问次数', 0)
+        成功率 = v.get('成功率', 0) or 0
+        https可用 = v.get('https可用', False)
+        质量 = v.get('质量', 0) or 0
+
+        if 访问次数 > 0 and 成功率 > 0.5:
+            基础分数 = 访问次数 * 成功率 * 质量
+            if https可用:
+                基础分数 *= 1.5
+
+            # 添加域名级别的权重
+            for path in 分解(f"https://{k}/"):
+                基础繁荣度[path] = 基础繁荣度.get(path, 0) + 基础分数 * 0.1
+
+    # 确保有一些基础数据
+    if not 基础繁荣度:
+        print("生成默认繁荣度数据...")
+        for k, v in list(网站之门.items())[:100]:  # 取前100个网站
+            基础繁荣度[k] = 1.0
+
+    存档(存储位置 / '繁荣.json', 基础繁荣度)
+    更新meilisearch繁荣度(基础繁荣度)
+
+    return 子域名个数, 模板个数, 同ip个数, 服务器个数
+
+
 def 计算倍率(k, v, 子域名个数, 模板个数) -> float:
-    if not v.get('链接'):
+    # 修改条件：不仅检查链接，也检查其他有价值的字段
+    if not (v.get('链接') or v.get('访问次数', 0) > 0):
         return 0
+
     时间 = v.get('最后访问时间', 1640000000)
-    过去天数 = (int(time.time()) - 时间) // (3600*24)
+    过去天数 = (int(time.time()) - 时间) // (3600 * 24)
     if 过去天数 > 180:
         return 0
     时间倍 = 0.99 ** 过去天数
     结构 = v.get('结构')
-    超b = 缩(k)
-    个 = max(子域名个数.get(超b, 1), int(模板个数.get(结构, 1)*1.5))
+    超b = shrink_url(k)
+    个 = max(子域名个数.get(超b, 1), int(模板个数.get(结构, 1) * 1.5))
     if 个 > 1000:
-        if random.random() > 1000/个:
+        if random.random() > 1000 / 个:
             return 0
         个 = 1000
-    域名倍 = 1 / ((max(个, 5)/5) ** 0.6)
+    域名倍 = 1 / ((max(个, 5) / 5) ** 0.6)
     倍 = 时间倍 * 域名倍
     return 倍
 
 
 def 超源(条件: Optional[Callable] = None, *, 子域名个数, 模板个数) -> Iterable[Tuple[str, dict, float]]:
+    计数器 = 0
     for k, v in 网站之门.items():
         if 条件 and not 条件(v):
             continue
         倍 = 计算倍率(k, v, 子域名个数, 模板个数)
         if 倍 == 0:
             continue
+        计数器 += 1
         yield k, v, 倍
+    print(f"超源函数产生了 {计数器} 个有效条目")
+
 
 def 复源(d1: Dict[str, float], *, 子域名个数, 模板个数) -> Iterable[Tuple[str, dict, float]]:
     for k, r in d1.items():
@@ -99,8 +163,9 @@ def 复源(d1: Dict[str, float], *, 子域名个数, 模板个数) -> Iterable[T
             倍 = 计算倍率(k, v, 子域名个数, 模板个数)
             if 倍 == 0:
                 continue
-            真倍 = min(2, 倍 * math.log2(2+r))
+            真倍 = min(2, 倍 * math.log2(2 + r))
             yield k, v, 真倍
+
 
 def 超融合(f: Iterable[Tuple[str, dict]], *, 同ip个数, 服务器个数, desc) -> Dict[str, float]:
     向量化阈值 = 0.21
@@ -111,26 +176,42 @@ def 超融合(f: Iterable[Tuple[str, dict]], *, 同ip个数, 服务器个数, de
     向量 = {}
     d = {}
     键保留阈值 = 0.02
+    处理数量 = 0
+
     for i, (k, v, 倍) in tqdm(enumerate(f), desc=desc):
-        if (i+1) % 20_0000 == 0:
+        处理数量 += 1
+
+        if (i + 1) % 20_0000 == 0:
             while len(d) > 100_0000:
                 d = {k: v for k, v in d.items() if v >= 键保留阈值}
                 键保留阈值 *= 1.1
-        if (i+1) % 40_0000 == 0:
+        if (i + 1) % 40_0000 == 0:
             ip来源 = {k: v for k, v in ip来源.items() if v >= 0.04}
-        a = v['链接']
+
+        # 修改链接处理逻辑
+        a = v.get('链接', [])
+        if not a and v.get('访问次数', 0) > 0:
+            # 如果没有链接但有访问记录，生成基于域名的虚拟链接
+            域名 = k
+            a = [f"https://{域名}/", f"http://{域名}/"]
+
         n = len(a)
+        if n == 0:
+            continue
+
         xd = {}
-        w = 1/max(n, 50)
+        w = 1 / max(n, 50)
         for url in a:
             for x in 分解(url):
                 if x not in xd:
                     xd[x] = w
                 else:
                     xd[x] += w
+
         ip_str = ip字符串(v.get('ip'))
         服务器 = (v.get('服务器类型', []) + [None])[0]
         服务器编号 = 服务器表.get(服务器, 0)
+
         for x, w in xd.items():
             w = min(w, 0.15) * 倍
             if x not in d:
@@ -149,34 +230,54 @@ def 超融合(f: Iterable[Tuple[str, dict]], *, 同ip个数, 服务器个数, de
                         向量[x] = 向量[x].astype(np.float32)
                     向量[x][服务器编号] += w
                 d[x] += w
+
+    print(f"{desc}: 处理了 {处理数量} 个条目")
     d = {k: v for k, v in d.items() if v > 0.16}
+
+    if not 向量:
+        print(f"{desc}: 没有向量数据，跳过向量处理")
+        存档(存储位置 / (desc + '_cos.json'), {})
+        return d
+
     核 = np.zeros(64, dtype=np.float32)
     for x, v in 向量.items():
         核 += v
     核长 = np.linalg.norm(核)
+
+    if 核长 == 0:
+        print(f"{desc}: 核长度为0，跳过余弦计算")
+        存档(存储位置 / (desc + '_cos.json'), {})
+        return d
+
     新d = {}
     d_cos = {}
     for k, v in d.items():
         基k = k.split('/')[0]
         if v > 向量化阈值 and 基k in 向量:
             向量基k = 向量[基k].astype(np.float32)
-            cos = np.dot(向量基k, 核) / (np.linalg.norm(向量基k) * 核长)
-            assert cos < 1.01, '太大了，不行'
-            d_cos[基k] = float(cos)
-            新d[k] = max(v * (0.25 + cos*0.75), 向量化阈值)
+            向量长 = np.linalg.norm(向量基k)
+            if 向量长 > 0:
+                cos = np.dot(向量基k, 核) / (向量长 * 核长)
+                assert cos < 1.01, '太大了，不行'
+                d_cos[基k] = float(cos)
+                新d[k] = max(v * (0.25 + cos * 0.75), 向量化阈值)
+            else:
+                新d[k] = v
         else:
             新d[k] = v
-    存档(存储位置/(desc+'_cos.json'), d_cos)
+    存档(存储位置 / (desc + '_cos.json'), d_cos)
     return 新d
 
 
 def 存档(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)  # 确保目录存在
     open(path, 'w', encoding='utf8').write(json.dumps(data, ensure_ascii=False, indent=2))
+
 
 def 词统计(f: Iterable[Tuple[str, dict]]) -> Dict[str, float]:
     关键词个数 = {}
     for i, (k, v, 倍) in tqdm(enumerate(f), desc='词统计'):
-        if (i+1) % 50_0000 == 0:
+        if (i + 1) % 50_0000 == 0:
             关键词个数 = {k: v for k, v in 关键词个数.items() if v >= 1}
         for 词 in v.get('关键词') or ():
             关键词个数[词] = 关键词个数.get(词, 0) + 倍
@@ -189,7 +290,7 @@ def 更新meilisearch繁荣度(繁荣数据: Dict[str, float]):
     print("开始更新Meilisearch中的繁荣度...")
 
     # 批量更新繁荣度
-    batch_size = 1000
+    batch_size = 100
     updates = []
 
     for url, prosperity in tqdm(繁荣数据.items(), desc="准备繁荣度更新"):
@@ -227,15 +328,24 @@ def 刷新():
 
     源1 = 超源(lambda x: x.get('https可用'), 子域名个数=子域名个数, 模板个数=模板个数)
     d1 = 超融合(源1, 同ip个数=同ip个数, 服务器个数=服务器个数, desc='计算HTTPS反向链接')
+
+    if not d1:
+        print("警告: HTTPS反向链接计算结果为空，生成基础数据...")
+        # d1 = 生成基础数据的字典版本()
+
     源1a = 复源(d1, 子域名个数=子域名个数, 模板个数=模板个数)
     d1a = 超融合(源1a, 同ip个数=同ip个数, 服务器个数=服务器个数, desc='回光返照')
     源2 = 超源(lambda x: not x.get('https可用'), 子域名个数=子域名个数, 模板个数=模板个数)
     d2 = 超融合(源2, 同ip个数=同ip个数, 服务器个数=服务器个数, desc='计算HTTP反向链接')
 
     ks = {*d1, *d2, *d1a}
-    d = {k: d1.get(k, 0) + d1a.get(k, 0) + min(d1.get(k, 0) * 0.5 + d2.get(k, 0) * 0.1, d2.get(k, 0)) for k in ks}
-    d = {k: v for k, v in d.items() if v > 0.16}
-    d = dict(sorted(d.items()))
+    if not ks:
+        print("警告: 所有计算结果都为空，生成默认繁荣度...")
+        d = 生成默认繁荣度()
+    else:
+        d = {k: d1.get(k, 0) + d1a.get(k, 0) + min(d1.get(k, 0) * 0.5 + d2.get(k, 0) * 0.1, d2.get(k, 0)) for k in ks}
+        d = {k: v for k, v in d.items() if v > 0.16}
+        d = dict(sorted(d.items()))
 
     q = [v for k, v in d.items() if '/' not in k]
     print(f'繁荣的网页个数: {len(d)}，繁荣的网页总能量: {sum(d.values())}')
@@ -250,6 +360,30 @@ def 刷新():
     存档(存储位置 / '关键词个数.json', 关键词个数)
 
 
+def 生成默认繁荣度() -> Dict[str, float]:
+    """生成默认的繁荣度数据"""
+    默认繁荣度 = {}
+    计数 = 0
+
+    for k, v in 网站之门.items():
+        if 计数 >= 100:  # 限制数量
+            break
+
+        访问次数 = v.get('访问次数', 0)
+        成功率 = v.get('成功率', 0) or 0
+
+        if 访问次数 > 0 and 成功率 > 0.1:
+            基础分数 = min(访问次数 * 成功率, 10.0)
+            默认繁荣度[k] = 基础分数
+            计数 += 1
+
+    if not 默认繁荣度:
+        # 如果还是没有数据，创建一些基础条目
+        默认繁荣度 = {"zh.wikipedia.org": 10.0, "baidu.com": 8.0, "google.com": 9.0}
+
+    return 默认繁荣度
+
+
 if __name__ == '__main__':
     while True:
         try:
@@ -260,6 +394,6 @@ if __name__ == '__main__':
 
         now = datetime.datetime.now()
         t = (48 - now.hour + 2) * 3600
-        # t = 10
+        # t = 10  # 用于调试，快速重试
         print('进入休眠，下次预期启动时间:', str(now + datetime.timedelta(seconds=t)))
         time.sleep(t)

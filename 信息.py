@@ -9,21 +9,21 @@ from utils import 分解
 from 配置 import 存储位置, 反向链接基准值
 
 
-def _归1化(d):
+def _normalize(d):
     q = [v for k, v in d.items() if '/' not in k]
-    总能量 = sum(q)
-    倍 = 反向链接基准值/总能量
+    sum_energy = sum(q)
+    倍 = 反向链接基准值/sum_energy
     return {k: v*倍 for k, v in d.items()}
 
 
-def 繁荣表() -> dict:
+def prosperity_data() -> dict:
     if not (存储位置/'繁荣.json').is_file():
         return {}
     with open(存储位置/'繁荣.json', encoding='utf8') as f:
         d = json.load(f)
         if len(d) == 0:
             return {}
-    d = _归1化(d)
+    d = _normalize(d)
     for k, v in d.items():
         now = k
         while True:
@@ -35,25 +35,25 @@ def 繁荣表() -> dict:
     return d
 
 
-def 调整表() -> dict:
+def adjustment_data() -> dict:
     if not (Path('./data')/'调整.yaml').is_file():
         return {}
     with open(Path('./data')/'调整.yaml', encoding='utf8') as f:
         return yaml.safe_load(f)
 
 
-def 屏蔽词() -> set:
+def block_words() -> set:
     path = Path('./data')/'屏蔽词.json'
     if not path.is_file():
         return []
     return {*json.load(open(path, encoding='utf8'))}
 
 
-_繁荣表 = 繁荣表()
-def 荣(url: str) -> Union[int, float]:
+_prosperity_data = prosperity_data()
+def prosperity(url: str) -> Union[int, float]:
     s = 0
     for i in 分解(url):
-        if t := _繁荣表.get(i):
+        if t := _prosperity_data.get(i):
             l = math.log2(2+t*2) - 1
         else:
             l = 0

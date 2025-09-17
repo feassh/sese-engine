@@ -17,7 +17,7 @@ from tqdm import tqdm
 from utils import netloc, 分解
 from 存储 import dump2, load
 from 分析 import 收缩, 停词表, 分
-from 文 import 摘要
+from 文 import get_desc
 
 
 with lzma.open('unittest/urls.json.xz', 'rt') as f:
@@ -89,7 +89,7 @@ for _ in range(3):
 
 
 def 测摘要():
-    title, description, text, href, 真url, 重定向表, raw, 服务器类型 = 摘要('https://github.com/')
+    title, description, text, href, 真url, 重定向表, raw, 服务器类型 = get_desc('https://github.com/')
     assert len(title) < len(description) < len(text)
     assert len(raw) > len(title + description + text)
     assert href
@@ -99,7 +99,7 @@ def 测摘要():
 
 
 def 测切(url):
-    r = 摘要(url, timeout=10)
+    r = get_desc(url, timeout=10)
     title, description, text = r[:3]
     def 分0(s):
         return [i for i in filter(None, map(收缩, jieba.lcut_for_search(s[:10000]))) if i not in 停词表 and len(i) <= 32]
